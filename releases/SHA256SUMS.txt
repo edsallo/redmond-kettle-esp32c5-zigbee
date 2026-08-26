@@ -1,0 +1,1 @@
+1208d1fe9ee7f321b5a6c4ac8ade661e3a9543de3e105590f9c1c3bb70752778  redmond-rk-g211s-zigbee-bridge-v1.0.0.bin

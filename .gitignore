@@ -1,4 +1,5 @@
 /build/
+/build-fixed/
 /managed_components/
 /sdkconfig
 sdkconfig.old

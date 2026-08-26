@@ -28,7 +28,11 @@ bool r4s_decode_status(const uint8_t *payload, size_t length, r4s_status_t *stat
     status->mode = payload[0];
     status->target_temperature = payload[2];
     status->temperature = payload[5];
-    status->is_on = payload[8] != 0;
+    /* RK-G200S/G211S state 4 means that the program has completed.  It is a
+     * non-zero value, but the kettle is already off.  Mode 3 is the autonomous
+     * night-light and must not be exposed as kettle power either. */
+    const uint8_t state = payload[8];
+    status->is_on = state != 0 && state != 4 && status->mode != 3;
     status->error = payload[9];
     return true;
 }

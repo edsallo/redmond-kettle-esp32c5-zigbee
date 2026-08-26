@@ -50,10 +50,12 @@ static void show_color(rgb_t color)
 static void panel_task(void *arg)
 {
     const rgb_t off = {0, 0, 0};
-    const rgb_t green = {0, 20, 0};
-    const rgb_t yellow = {20, 10, 0};
-    const rgb_t purple = {14, 0, 20};
-    const rgb_t red = {24, 0, 0};
+    /* Keep the board indicator visible without lighting the room: roughly
+       30% of the previous per-channel levels. */
+    const rgb_t green = {0, 6, 0};
+    const rgb_t yellow = {6, 3, 0};
+    const rgb_t purple = {4, 0, 6};
+    const rgb_t red = {7, 0, 0};
     bool phase = false;
     bool pressed = false;
     TickType_t pressed_at = 0;

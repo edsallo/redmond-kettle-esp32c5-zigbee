@@ -79,7 +79,9 @@ SHA-256 указан в [`releases/SHA256SUMS.txt`](releases/SHA256SUMS.txt).
 ### 1. Установите Python
 
 1. Откройте [python.org/downloads/macos](https://www.python.org/downloads/macos/).
-2. Установите актуальный Python 3.
+2. Установите актуальный Python **3.10 или новее**. Встроенный в старые версии
+   macOS Python 3.9 не подходит: он может установить устаревший `esptool` без
+   полноценной поддержки ESP32-C5.
 3. Откройте приложение **Terminal**.
 4. Проверьте установку:
 
@@ -87,13 +89,16 @@ SHA-256 указан в [`releases/SHA256SUMS.txt`](releases/SHA256SUMS.txt).
 python3 --version
 ```
 
-Должна появиться строка `Python 3.x.x`.
+Должна появиться версия 3.10 или новее, например `Python 3.12.x`.
 
 ### 2. Установите esptool
 
 ```bash
-python3 -m pip install --upgrade esptool
+python3 -m pip install --upgrade pip esptool
+python3 -m esptool version
 ```
+
+Используйте `esptool` 4.12 или новее.
 
 ### 3. Найдите порт ESP
 
@@ -101,7 +106,7 @@ python3 -m pip install --upgrade esptool
 2. Выполните:
 
 ```bash
-ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null
+find /dev -maxdepth 1 \( -name 'cu.usbmodem*' -o -name 'cu.usbserial*' \) -print
 ```
 
 Пример порта:
@@ -143,7 +148,7 @@ python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 write-flash
 ### 1. Установите Python
 
 1. Откройте [python.org/downloads/windows](https://www.python.org/downloads/windows/).
-2. Запустите установщик Python 3.
+2. Запустите установщик Python 3.10 или новее.
 3. На первом экране обязательно отметьте **Add python.exe to PATH**.
 4. Завершите установку.
 5. Откройте **PowerShell** и проверьте:
@@ -155,8 +160,11 @@ py --version
 ### 2. Установите esptool
 
 ```powershell
-py -m pip install --upgrade esptool
+py -m pip install --upgrade pip esptool
+py -m esptool version
 ```
+
+Используйте `esptool` 4.12 или новее.
 
 ### 3. Найдите COM-порт
 

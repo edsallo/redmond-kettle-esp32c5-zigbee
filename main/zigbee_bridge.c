@@ -97,12 +97,11 @@ static void schedule_route_repair(void)
 static void secure_rejoin_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
-    ezb_nwk_leave_req_t request = {.rejoin = true, .remove_children = false};
-    ezb_nwk_get_extended_address(&request.device_address);
     esp_zigbee_lock_acquire(portMAX_DELAY);
-    const ezb_err_t err = ezb_nwk_leave_request(&request);
+    ezb_bdb_set_router_rejoin_required(true);
+    const ezb_err_t err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
     esp_zigbee_lock_release();
-    ESP_LOGW(TAG, "No active Zigbee links; secure rejoin requested: 0x%x", err);
+    ESP_LOGW(TAG, "BDB router rejoin requested: 0x%x", err);
     vTaskDelete(NULL);
 }
 

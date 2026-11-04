@@ -9,6 +9,7 @@
 #include "kettle_ble.h"
 #include "zigbee_bridge.h"
 #include "status_panel.h"
+#include "wifi_ota.h"
 
 static const char *TAG = "RK_G211S_BRIDGE";
 
@@ -53,6 +54,7 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
 
     ESP_LOGI(TAG, "Starting REDMOND BLE to Zigbee bridge");
+    ESP_ERROR_CHECK(wifi_ota_init(zigbee_bridge_update_ota_status));
     ESP_ERROR_CHECK(zigbee_bridge_start());
     ESP_ERROR_CHECK(kettle_ble_start(kettle_status_changed));
     ESP_ERROR_CHECK(status_panel_start());

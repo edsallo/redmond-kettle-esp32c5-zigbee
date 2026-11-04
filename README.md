@@ -1,5 +1,25 @@
 # REDMOND RK-G211S: мост Bluetooth LE → Zigbee
 
+## Беспроводное обновление через Homey
+
+Начиная с версии 1.1.0 мост поддерживает безопасное гибридное OTA-обновление:
+
+1. Homey передаёт ESP по Zigbee имя Wi-Fi, пароль и прямую HTTPS-ссылку на новый файл приложения `.bin`.
+2. ESP временно подключается к Wi-Fi и скачивает файл непосредственно с HTTPS-сервера.
+3. ESP проверяет TLS-сертификат сервера, имя проекта, новую версию и цифровую подпись RSA-3072.
+4. Образ записывается в неактивный OTA-раздел, после чего ESP перезагружается.
+5. Если новая версия не проработает стабильно 30 секунд, загрузчик возвращает предыдущую прошивку.
+
+Для первой установки версии 1.1.0 необходима полная прошивка через UART, поскольку меняется таблица разделов. Последующие обновления запускаются из карточки устройства Homey. Секретный ключ `keys/ota_signing_key.pem` не публикуется и должен быть сохранён: будущие OTA-образы этой установки подписываются тем же ключом.
+
+В расширенных настройках устройства Homey задаются сеть Wi-Fi, пароль и прямая HTTPS-ссылка на подписанный OTA-файл. Для версии 1.1.1 используйте:
+
+```text
+https://raw.githubusercontent.com/edsallo/redmond-kettle-esp32c5-zigbee/main/releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-ota.bin
+```
+
+Wi-Fi включается только на время обновления.
+
 Эта прошивка превращает плату на **ESP32-C5-WROOM-1 N8R4** в локальный мост:
 
 ```text
@@ -66,7 +86,7 @@ Home Automation и стандартные кластеры:
 
 Скачайте файл:
 
-[`releases/redmond-rk-g211s-zigbee-bridge-v1.0.0.bin`](releases/redmond-rk-g211s-zigbee-bridge-v1.0.0.bin)
+[`releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin`](releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin)
 
 SHA-256 указан в [`releases/SHA256SUMS.txt`](releases/SHA256SUMS.txt).
 
@@ -131,14 +151,14 @@ cd ~/Downloads
 
 ```bash
 python3 -m esptool --chip esp32c5 --port PORT erase-flash
-python3 -m esptool --chip esp32c5 --port PORT write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.0.0.bin
+python3 -m esptool --chip esp32c5 --port PORT write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
 ```
 
 Пример:
 
 ```bash
 python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 erase-flash
-python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.0.0.bin
+python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
 ```
 
 После сообщения об успешной проверке данных ESP перезапустится автоматически.
@@ -187,7 +207,7 @@ cd $HOME\Downloads
 
 ```powershell
 py -m esptool --chip esp32c5 --port COM5 erase-flash
-py -m esptool --chip esp32c5 --port COM5 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.0.0.bin
+py -m esptool --chip esp32c5 --port COM5 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
 ```
 
 После успешной записи ESP перезапустится автоматически.
@@ -317,8 +337,12 @@ Bluetooth-модуль находится в чайнике и обесточи�
 Для сборки требуется ESP-IDF 5.5 или новее с поддержкой ESP32-C5. Зависимости
 Zigbee и LED Strip загружаются ESP-IDF Component Manager автоматически.
 
+Перед первой сборкой создайте личный ключ подписи и сохраните его резервную копию. Не публикуйте этот файл:
+
 ```bash
 . "$IDF_PATH/export.sh"
+mkdir -p keys
+espsecure.py generate_signing_key --version 2 keys/ota_signing_key.pem
 idf.py set-target esp32c5
 idf.py build
 idf.py -p PORT erase-flash flash monitor
@@ -330,7 +354,8 @@ idf.py -p PORT erase-flash flash monitor
 |---|---|
 | `0x2000` | `build/bootloader/bootloader.bin` |
 | `0x8000` | `build/partition_table/partition-table.bin` |
-| `0x10000` | `build/redmond_zigbee_bridge.bin` |
+| `0x11000` | `build/ota_data_initial.bin` |
+| `0x20000` | `build/redmond_zigbee_bridge.bin` |
 
 ## Проверенная модель чайника
 

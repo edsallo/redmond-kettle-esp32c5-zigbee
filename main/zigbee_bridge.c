@@ -4,18 +4,50 @@
 #include "esp_log.h"
 #include "esp_zigbee.h"
 #include "ezbee/zha.h"
+#include "ezbee/zcl/cluster/custom.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "kettle_ble.h"
+#include <string.h>
 
 #define KETTLE_EP 1
 #define MANUFACTURER_NAME "\x08" "EdS Home"
 #define MODEL_IDENTIFIER  "\x0b" "RK-G211S-ZB"
+#define OTA_CLUSTER_ID 0xFC00
+#define OTA_ATTR_COMMAND 0x0000
+#define OTA_ATTR_STATUS 0x0001
+#define OTA_ATTR_PROGRESS 0x0002
+#define OTA_ATTR_VERSION 0x0003
+#define OTA_ATTR_WIFI_SSID 0x0010
+#define OTA_ATTR_WIFI_PASSWORD 0x0011
+#define OTA_ATTR_FIRMWARE_URL 0x0012
 
 static const char *TAG = "ZB_KETTLE";
 static bool s_stack_started;
 static bool s_joined;
 static bool s_retry_pending;
+static uint8_t s_ota_command;
+static uint8_t s_ota_status;
+static uint8_t s_ota_progress;
+static uint8_t s_ota_version[33];
+static uint8_t s_wifi_ssid[33];
+static uint8_t s_wifi_password[65];
+static uint8_t s_firmware_url[255];
+
+static void zcl_string_set(uint8_t *destination, size_t capacity, const char *source)
+{
+    size_t length = source ? strnlen(source, capacity - 1) : 0;
+    destination[0] = (uint8_t)length;
+    if (length) memcpy(destination + 1, source, length);
+}
+
+static void zcl_string_get(const uint8_t *source, char *destination, size_t capacity)
+{
+    size_t length = source[0];
+    if (length >= capacity) length = capacity - 1;
+    memcpy(destination, source + 1, length);
+    destination[length] = '\0';
+}
 
 static void steering_retry_task(void *arg)
 {
@@ -59,6 +91,14 @@ void zigbee_bridge_update(const r4s_status_t *status, bool available)
                   EZB_ZCL_ATTR_THERMOSTAT_SYSTEM_MODE_ID, &system_mode);
 }
 
+void zigbee_bridge_update_ota_status(wifi_ota_status_t status, uint8_t progress)
+{
+    s_ota_status = (uint8_t)status;
+    s_ota_progress = progress;
+    set_attribute(OTA_CLUSTER_ID, OTA_ATTR_STATUS, &s_ota_status);
+    set_attribute(OTA_CLUSTER_ID, OTA_ATTR_PROGRESS, &s_ota_progress);
+}
+
 static void set_attr_handler(ezb_zcl_set_attr_value_message_t *message)
 {
     if (!message || message->info.status != EZB_ZCL_STATUS_SUCCESS) return;
@@ -81,6 +121,28 @@ static void set_attr_handler(ezb_zcl_set_attr_value_message_t *message)
         const uint8_t mode = *(uint8_t *)value;
         result = mode == EZB_ZCL_THERMOSTAT_SYSTEM_MODE_OFF ?
                  kettle_ble_set_power(false) : ESP_OK;
+    } else if (message->info.cluster_id == OTA_CLUSTER_ID) {
+        if (attr == OTA_ATTR_COMMAND && *(uint8_t *)value == 1) {
+            result = wifi_ota_start();
+            s_ota_command = 0;
+            set_attribute(OTA_CLUSTER_ID, OTA_ATTR_COMMAND, &s_ota_command);
+        } else if (attr == OTA_ATTR_WIFI_SSID || attr == OTA_ATTR_WIFI_PASSWORD ||
+                   attr == OTA_ATTR_FIRMWARE_URL) {
+            uint8_t *destination = attr == OTA_ATTR_WIFI_SSID ? s_wifi_ssid :
+                                   attr == OTA_ATTR_WIFI_PASSWORD ? s_wifi_password :
+                                   s_firmware_url;
+            size_t capacity = attr == OTA_ATTR_WIFI_SSID ? sizeof(s_wifi_ssid) :
+                              attr == OTA_ATTR_WIFI_PASSWORD ? sizeof(s_wifi_password) :
+                              sizeof(s_firmware_url);
+            size_t encoded_length = (size_t)((uint8_t *)value)[0] + 1;
+            if (encoded_length > capacity) encoded_length = capacity;
+            memcpy(destination, value, encoded_length);
+            char ssid[33], password[65], url[255];
+            zcl_string_get(s_wifi_ssid, ssid, sizeof(ssid));
+            zcl_string_get(s_wifi_password, password, sizeof(password));
+            zcl_string_get(s_firmware_url, url, sizeof(url));
+            result = wifi_ota_save_config(ssid, password, url);
+        }
     }
 
     message->out.result = result == ESP_OK ? EZB_ZCL_STATUS_SUCCESS :
@@ -167,6 +229,29 @@ static esp_err_t register_device(void)
     ESP_RETURN_ON_ERROR(ezb_af_endpoint_add_cluster_desc(
         ep, ezb_zcl_temperature_measurement_create_cluster_desc(
                 &temp_cfg, EZB_ZCL_CLUSTER_SERVER)), TAG, "add temperature cluster");
+
+    zcl_string_set(s_ota_version, sizeof(s_ota_version), wifi_ota_version());
+    ezb_zcl_custom_cluster_config_t ota_cfg = {.cluster_id = OTA_CLUSTER_ID};
+    ezb_zcl_cluster_desc_t ota_cluster = ezb_zcl_custom_create_cluster_desc(
+        &ota_cfg, EZB_ZCL_CLUSTER_SERVER);
+    ESP_RETURN_ON_FALSE(ota_cluster, ESP_FAIL, TAG, "create OTA cluster");
+    const uint8_t rw = EZB_ZCL_ATTR_ACCESS_READ_WRITE;
+    const uint8_t ro_report = EZB_ZCL_ATTR_ACCESS_READ | EZB_ZCL_ATTR_ACCESS_REPORTING;
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_COMMAND,
+        EZB_ZCL_ATTR_TYPE_UINT8, rw, &s_ota_command), TAG, "OTA command attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_STATUS,
+        EZB_ZCL_ATTR_TYPE_ENUM8, ro_report, &s_ota_status), TAG, "OTA status attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_PROGRESS,
+        EZB_ZCL_ATTR_TYPE_UINT8, ro_report, &s_ota_progress), TAG, "OTA progress attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_VERSION,
+        EZB_ZCL_ATTR_TYPE_STRING, EZB_ZCL_ATTR_ACCESS_READ, s_ota_version), TAG, "OTA version attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_WIFI_SSID,
+        EZB_ZCL_ATTR_TYPE_STRING, rw, s_wifi_ssid), TAG, "Wi-Fi SSID attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_WIFI_PASSWORD,
+        EZB_ZCL_ATTR_TYPE_STRING, EZB_ZCL_ATTR_ACCESS_WRITE, s_wifi_password), TAG, "Wi-Fi password attr");
+    ESP_RETURN_ON_ERROR(ezb_zcl_custom_cluster_desc_add_attr(ota_cluster, OTA_ATTR_FIRMWARE_URL,
+        EZB_ZCL_ATTR_TYPE_STRING, rw, s_firmware_url), TAG, "firmware URL attr");
+    ESP_RETURN_ON_ERROR(ezb_af_endpoint_add_cluster_desc(ep, ota_cluster), TAG, "add OTA cluster");
 
     ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(device, ep), TAG, "add endpoint");
     ESP_RETURN_ON_ERROR(ezb_af_device_desc_register(device), TAG, "register device");

@@ -16,14 +16,16 @@ static const char *TAG = "RK_G211S_BRIDGE";
 static void diagnostic_console_task(void *arg)
 {
     char line[32];
-    ESP_LOGI(TAG, "Console ready: heat 40..100 | boil | off");
+    ESP_LOGI(TAG, "Console ready: heat 40..100 | boil | off | zigbee-reset");
     for (;;) {
         if (!fgets(line, sizeof(line), stdin)) {
             clearerr(stdin);
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        if (strncmp(line, "heat ", 5) == 0) {
+        if (strncmp(line, "zigbee-info", 11) == 0) {
+            zigbee_bridge_dump_network();
+        } else if (strncmp(line, "heat ", 5) == 0) {
             int target = atoi(line + 5);
             esp_err_t err = kettle_ble_heat_to((uint8_t)target);
             ESP_LOGI(TAG, "CONSOLE heat %d: %s", target, esp_err_to_name(err));
@@ -33,8 +35,11 @@ static void diagnostic_console_task(void *arg)
         } else if (strncmp(line, "off", 3) == 0) {
             esp_err_t err = kettle_ble_set_power(false);
             ESP_LOGI(TAG, "CONSOLE off: %s", esp_err_to_name(err));
+        } else if (strncmp(line, "zigbee-reset", 12) == 0) {
+            ESP_LOGW(TAG, "CONSOLE: factory-reset Zigbee network only");
+            zigbee_bridge_factory_reset();
         } else {
-            ESP_LOGW(TAG, "Unknown command. Use: heat 40..100 | boil | off");
+            ESP_LOGW(TAG, "Unknown command. Use: heat 40..100 | boil | off | zigbee-reset");
         }
     }
 }

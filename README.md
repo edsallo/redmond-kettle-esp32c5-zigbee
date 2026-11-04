@@ -12,10 +12,10 @@
 
 Для первой установки версии 1.1.0 необходима полная прошивка через UART, поскольку меняется таблица разделов. Последующие обновления запускаются из карточки устройства Homey. Секретный ключ `keys/ota_signing_key.pem` не публикуется и должен быть сохранён: будущие OTA-образы этой установки подписываются тем же ключом.
 
-В расширенных настройках устройства Homey задаются сеть Wi-Fi, пароль и прямая HTTPS-ссылка на подписанный OTA-файл. Для версии 1.1.1 используйте:
+В расширенных настройках устройства Homey задаются сеть Wi-Fi, пароль и прямая HTTPS-ссылка на подписанный OTA-файл. Для версии 1.1.5 используйте:
 
 ```text
-https://raw.githubusercontent.com/edsallo/redmond-kettle-esp32c5-zigbee/main/releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-ota.bin
+https://tinyurl.com/2cyh5yj4
 ```
 
 Wi-Fi включается только на время обновления.
@@ -86,7 +86,7 @@ Home Automation и стандартные кластеры:
 
 Скачайте файл:
 
-[`releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin`](releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin)
+[`releases/redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin`](releases/redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin)
 
 SHA-256 указан в [`releases/SHA256SUMS.txt`](releases/SHA256SUMS.txt).
 
@@ -151,14 +151,14 @@ cd ~/Downloads
 
 ```bash
 python3 -m esptool --chip esp32c5 --port PORT erase-flash
-python3 -m esptool --chip esp32c5 --port PORT write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
+python3 -m esptool --chip esp32c5 --port PORT write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin
 ```
 
 Пример:
 
 ```bash
 python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 erase-flash
-python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
+python3 -m esptool --chip esp32c5 --port /dev/cu.usbmodem5B420100151 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin
 ```
 
 После сообщения об успешной проверке данных ESP перезапустится автоматически.
@@ -207,7 +207,7 @@ cd $HOME\Downloads
 
 ```powershell
 py -m esptool --chip esp32c5 --port COM5 erase-flash
-py -m esptool --chip esp32c5 --port COM5 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
+py -m esptool --chip esp32c5 --port COM5 write-flash 0x0 redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin
 ```
 
 После успешной записи ESP перезапустится автоматически.

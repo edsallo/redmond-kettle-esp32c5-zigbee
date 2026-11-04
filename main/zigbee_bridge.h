@@ -1,4 +1,5 @@
 #pragma once
+void zigbee_bridge_dump_network(void);
 
 #include "esp_err.h"
 #include "redmond_protocol.h"

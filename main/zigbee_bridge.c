@@ -4,10 +4,15 @@
 #include "esp_log.h"
 #include "esp_zigbee.h"
 #include "ezbee/zha.h"
+#include "ezbee/nwk.h"
+#include "ezbee/test_utils.h"
 #include "ezbee/zcl/cluster/custom.h"
+#include "ezbee/zcl/zcl_general_cmd.h"
+#include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "kettle_ble.h"
+#include <limits.h>
 #include <string.h>
 
 #define KETTLE_EP 1
@@ -26,6 +31,12 @@ static const char *TAG = "ZB_KETTLE";
 static bool s_stack_started;
 static bool s_joined;
 static bool s_retry_pending;
+static bool s_report_task_started;
+static volatile uint8_t s_tx_failures;
+static volatile bool s_route_repair_pending;
+static int16_t s_last_reported_temperature = INT16_MIN;
+static bool s_last_reported_power;
+static bool s_has_reported_power;
 static uint8_t s_ota_command;
 static uint8_t s_ota_status;
 static uint8_t s_ota_progress;
@@ -33,6 +44,127 @@ static uint8_t s_ota_version[33];
 static uint8_t s_wifi_ssid[33];
 static uint8_t s_wifi_password[65];
 static uint8_t s_firmware_url[255];
+
+static void heartbeat_task(void *arg);
+
+void zigbee_bridge_dump_network(void)
+{
+    if (!s_stack_started) return;
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ESP_LOGI(TAG, "NETWORK SNAPSHOT joined=%d", s_joined);
+    ezb_nwk_info_iterator_t iterator = NULL;
+    ezb_nwk_neighbor_info_t neighbor;
+    while (ezb_nwk_get_next_neighbor(&iterator, &neighbor) == EZB_ERR_NONE) {
+        ESP_LOGI(TAG, "Neighbor short=0x%04x lqi=%u rssi=%d out_cost=%u",
+                 neighbor.short_addr, neighbor.lqi, neighbor.rssi, neighbor.outgoing_cost);
+    }
+    iterator = NULL;
+    ezb_nwk_route_info_t route;
+    while (ezb_nwk_get_next_route(&iterator, &route) == EZB_ERR_NONE) {
+        ESP_LOGI(TAG, "Route dest=0x%04x next=0x%04x state=%u expiry=%u",
+                 route.dest_addr, route.next_hop_addr, route.flags.status, route.expiry);
+    }
+    esp_zigbee_lock_release();
+}
+
+static void route_repair_task(void *arg)
+{
+    /* Drop only the stale route to the coordinator.  The next report makes
+       the Zigbee stack discover a new path through any available router. */
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ezb_nwk_route_delete(0x0000);
+    const ezb_zdo_device_annce_req_t announce = {0};
+    ezb_zdo_device_annce_req(&announce);
+    esp_zigbee_lock_release();
+    ESP_LOGW(TAG, "Coordinator route invalidated; rediscovery requested");
+    s_tx_failures = 0;
+    s_route_repair_pending = false;
+    vTaskDelete(NULL);
+}
+
+static void schedule_route_repair(void)
+{
+    if (!s_route_repair_pending) {
+        s_route_repair_pending = true;
+        xTaskCreate(route_repair_task, "zb_route_repair", 3072, NULL, 4, NULL);
+    }
+}
+
+static void secure_rejoin_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ezb_nwk_leave_req_t request = {.rejoin = true, .remove_children = false};
+    ezb_nwk_get_extended_address(&request.device_address);
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    const ezb_err_t err = ezb_nwk_leave_request(&request);
+    esp_zigbee_lock_release();
+    ESP_LOGW(TAG, "No active Zigbee links; secure rejoin requested: 0x%x", err);
+    vTaskDelete(NULL);
+}
+
+static void start_heartbeat(void)
+{
+    if (!s_report_task_started) {
+        s_report_task_started = true;
+        xTaskCreate(heartbeat_task, "zb_heartbeat", 4096, NULL, 3, NULL);
+    }
+}
+
+static void report_confirmation(ezb_af_user_cnf_t *confirmation, void *user_ctx)
+{
+    if (confirmation && confirmation->status == 0) {
+        s_tx_failures = 0;
+        return;
+    }
+    if (s_tx_failures < UINT8_MAX) s_tx_failures++;
+    if (s_tx_failures >= 2) schedule_route_repair();
+}
+
+static void report_attribute_locked(uint16_t cluster, uint16_t attribute)
+{
+    const ezb_zcl_report_attr_cmd_t report = {
+        .cmd_ctrl = {
+            .dst_addr = EZB_ADDRESS_SHORT(0x0000),
+            .dst_ep = 1,
+            .src_ep = KETTLE_EP,
+            .cluster_id = cluster,
+            .manuf_code = EZB_ZCL_STD_MANUF_CODE,
+            .fc = {
+                .manuf_specific = 0,
+                .direction = EZB_ZCL_CMD_DIRECTION_TO_CLI,
+                .dis_default_rsp = 1,
+            },
+            .cnf_ctx = {.cb = report_confirmation, .user_ctx = NULL},
+        },
+        .payload.attr_id = attribute,
+    };
+    const ezb_err_t err = ezb_zcl_report_attr_cmd_req(&report);
+    if (err != EZB_ERR_NONE) {
+        ESP_LOGW(TAG, "Attribute report 0x%04x/0x%04x queue error: 0x%x",
+                 cluster, attribute, err);
+    }
+}
+
+static void report_state_locked(void)
+{
+    report_attribute_locked(EZB_ZCL_CLUSTER_ID_TEMPERATURE_MEASUREMENT,
+                            EZB_ZCL_ATTR_TEMPERATURE_MEASUREMENT_MEASURED_VALUE_ID);
+    report_attribute_locked(EZB_ZCL_CLUSTER_ID_ON_OFF,
+                            EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID);
+}
+
+static void heartbeat_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    for (;;) {
+        if (s_joined && s_stack_started) {
+            esp_zigbee_lock_acquire(portMAX_DELAY);
+            report_state_locked();
+            esp_zigbee_lock_release();
+        }
+        vTaskDelay(pdMS_TO_TICKS(45000));
+    }
+}
 
 static void zcl_string_set(uint8_t *destination, size_t capacity, const char *source)
 {
@@ -89,6 +221,24 @@ void zigbee_bridge_update(const r4s_status_t *status, bool available)
                   EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID, &target);
     set_attribute(EZB_ZCL_CLUSTER_ID_THERMOSTAT,
                   EZB_ZCL_ATTR_THERMOSTAT_SYSTEM_MODE_ID, &system_mode);
+
+    const bool temperature_changed = temperature != s_last_reported_temperature;
+    const bool power_changed = !s_has_reported_power || power != s_last_reported_power;
+    if (s_joined && (temperature_changed || power_changed)) {
+        esp_zigbee_lock_acquire(portMAX_DELAY);
+        if (temperature_changed) {
+            report_attribute_locked(EZB_ZCL_CLUSTER_ID_TEMPERATURE_MEASUREMENT,
+                                    EZB_ZCL_ATTR_TEMPERATURE_MEASUREMENT_MEASURED_VALUE_ID);
+            s_last_reported_temperature = temperature;
+        }
+        if (power_changed) {
+            report_attribute_locked(EZB_ZCL_CLUSTER_ID_ON_OFF,
+                                    EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID);
+            s_last_reported_power = power;
+            s_has_reported_power = true;
+        }
+        esp_zigbee_lock_release();
+    }
 }
 
 void zigbee_bridge_update_ota_status(wifi_ota_status_t status, uint8_t progress)
@@ -167,6 +317,7 @@ static bool signal_handler(const ezb_app_signal_t *signal)
             *(ezb_bdb_comm_status_t *)ezb_app_signal_get_params(signal);
         if (status == EZB_BDB_STATUS_SUCCESS) {
             s_joined = !ezb_bdb_is_factory_new();
+            if (s_joined) start_heartbeat();
             if (ezb_bdb_is_factory_new()) {
                 ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
             }
@@ -181,12 +332,38 @@ static bool signal_handler(const ezb_app_signal_t *signal)
         ESP_LOGI(TAG, "Network steering: %s",
                  status == EZB_BDB_STATUS_SUCCESS ? "joined" : "failed");
         s_joined = status == EZB_BDB_STATUS_SUCCESS;
+        if (s_joined) start_heartbeat();
         if (!s_joined && !s_retry_pending) {
             s_retry_pending = true;
             xTaskCreate(steering_retry_task, "zb_retry", 3072, NULL, 4, NULL);
         }
         break;
     }
+    case EZB_NWK_SIGNAL_NO_ACTIVE_LINKS_LEFT:
+        ESP_LOGW(TAG, "Zigbee has no active links");
+        xTaskCreate(secure_rejoin_task, "zb_rejoin", 3072, NULL, 4, NULL);
+        break;
+    case EZB_NWK_SIGNAL_NETWORK_STATUS: {
+        const ezb_nwk_signal_network_status_params_t *params =
+            (const ezb_nwk_signal_network_status_params_t *)ezb_app_signal_get_params(signal);
+        const uint8_t status = params ? params->status : 0xff;
+        ESP_LOGW(TAG, "Zigbee network status 0x%02x for 0x%04x", status,
+                 params ? params->network_addr : 0xffff);
+        if (status == EZB_NWK_NETWORK_STATUS_LEGACY_NO_ROUTE_AVAILABLE ||
+            status == EZB_NWK_NETWORK_STATUS_LEGACY_LINK_FAILURE ||
+            status == EZB_NWK_NETWORK_STATUS_LINK_FAILURE ||
+            status == EZB_NWK_NETWORK_STATUS_TARGET_DEVICE_UNAVAILABLE ||
+            status == EZB_NWK_NETWORK_STATUS_SOURCE_ROUTE_FAILURE ||
+            status == EZB_NWK_NETWORK_STATUS_MANY_TO_ONE_ROUTE_FAILURE) {
+            schedule_route_repair();
+        }
+        break;
+    }
+    case EZB_ZDO_SIGNAL_LEAVE:
+    case EZB_ZDO_SIGNAL_LEAVE_INDICATION:
+        s_joined = false;
+        ESP_LOGW(TAG, "Device left Zigbee network");
+        break;
     default:
         break;
     }
@@ -273,6 +450,7 @@ static void zigbee_task(void *arg)
         },
     };
     ESP_ERROR_CHECK(esp_zigbee_init(&config));
+    ezb_set_tx_power(20);
     ezb_aps_secur_enable_distributed_security(false);
     ESP_ERROR_CHECK(ezb_bdb_set_primary_channel_set(0x07FFF800UL));
     ESP_ERROR_CHECK(ezb_app_signal_add_handler(signal_handler));

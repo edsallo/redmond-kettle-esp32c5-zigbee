@@ -1,5 +1,4 @@
 1208d1fe9ee7f321b5a6c4ac8ade661e3a9543de3e105590f9c1c3bb70752778  releases/redmond-rk-g211s-zigbee-bridge-v1.0.0.bin
-c04460fc8ee12fad44fefbaea14c9404d6424cdf049cf7d26045a8a29cad99ab  releases/redmond-rk-g211s-zigbee-bridge-v1.1.0-full.bin
-0d8a14e566175ac7d1c97fd640d8409cf5db9a8c65fb4ca3a01219b3547039ff  releases/redmond-rk-g211s-zigbee-bridge-v1.1.0-ota.bin
-cc73ca74b6a975221ee13673fb79df577720fe1e27a167e8302c133bd69cf521  releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-full.bin
-1290c6dc730f6dbb7cd3e706177aa15c5a25b3ba3a4fef82b8227da02efb3fc9  releases/redmond-rk-g211s-zigbee-bridge-v1.1.1-ota.bin
+6664ed5d3c897722015ad4249ff3227f084a9f2aef30d22a5b00f16ea49ceb09  releases/redmond-rk-g211s-zigbee-bridge-v1.1.4-diag-ota.bin
+5bc5cfec5d572df3fa7e60d27a66b73678e5af1944706bd7d7d54fad8d441aab  releases/redmond-rk-g211s-zigbee-bridge-v1.1.5-full.bin
+22ba952d15a273f5ea39cd8c10ee113d246501183dc50f4e1577ddd41e8f291a  releases/redmond-rk-g211s-zigbee-bridge-v1.1.5-ota.bin

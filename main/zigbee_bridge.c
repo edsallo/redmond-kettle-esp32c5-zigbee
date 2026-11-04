@@ -3,6 +3,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_zigbee.h"
+#include "esp_timer.h"
 #include "ezbee/zha.h"
 #include "ezbee/nwk.h"
 #include "ezbee/test_utils.h"
@@ -37,6 +38,9 @@ static volatile bool s_route_repair_pending;
 static int16_t s_last_reported_temperature = INT16_MIN;
 static bool s_last_reported_power;
 static bool s_has_reported_power;
+static int64_t s_last_downlink_us;
+static int64_t s_last_downlink_repair_us;
+static bool s_downlink_watchdog_armed;
 static uint8_t s_ota_command;
 static uint8_t s_ota_status;
 static uint8_t s_ota_progress;
@@ -161,6 +165,17 @@ static void heartbeat_task(void *arg)
             esp_zigbee_lock_acquire(portMAX_DELAY);
             report_state_locked();
             esp_zigbee_lock_release();
+            const int64_t now = esp_timer_get_time();
+            // Armed only by a Homey heartbeat, so generic Zigbee hubs are
+            // unaffected. Never restart the MCU or touch BLE/heating state.
+            if (s_downlink_watchdog_armed && s_ota_status != WIFI_OTA_CONNECTING &&
+                s_ota_status != WIFI_OTA_DOWNLOADING && s_ota_status != WIFI_OTA_INSTALLING &&
+                now - s_last_downlink_us > 180000000LL &&
+                now - s_last_downlink_repair_us > 300000000LL) {
+                s_last_downlink_repair_us = now;
+                ESP_LOGW(TAG, "Homey downlink heartbeat missing: secure network rejoin");
+                xTaskCreate(secure_rejoin_task, "zb_downlink", 3072, NULL, 4, NULL);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(45000));
     }
@@ -272,7 +287,11 @@ static void set_attr_handler(ezb_zcl_set_attr_value_message_t *message)
         result = mode == EZB_ZCL_THERMOSTAT_SYSTEM_MODE_OFF ?
                  kettle_ble_set_power(false) : ESP_OK;
     } else if (message->info.cluster_id == OTA_CLUSTER_ID) {
-        if (attr == OTA_ATTR_COMMAND && *(uint8_t *)value == 1) {
+        if (attr == OTA_ATTR_COMMAND && *(uint8_t *)value == 2) {
+            s_last_downlink_us = esp_timer_get_time();
+            s_downlink_watchdog_armed = true;
+            s_ota_command = 0;
+        } else if (attr == OTA_ATTR_COMMAND && *(uint8_t *)value == 1) {
             result = wifi_ota_start();
             s_ota_command = 0;
             set_attribute(OTA_CLUSTER_ID, OTA_ATTR_COMMAND, &s_ota_command);
